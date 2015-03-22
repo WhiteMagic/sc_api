@@ -69,8 +69,15 @@ class Pilot(object):
 
     @property
     def flight_time(self):
-        arr = [int(v) for v in self._data["flight_time"].split(":")]
-        return (3600 * arr[0] + 60 * arr[1] + arr[2]) / 3600.0
+        data = self._data["flight_time"]
+        if data == -1:
+            return 0
+        else:
+            try:
+                arr = [int(v) for v in data.split(":")]
+                return (3600 * arr[0] + 60 * arr[1] + arr[2]) / 3600.0
+            except AttributeError:
+                print(data, self._data["nickname"])
 
     @property
     def matches(self):
@@ -183,7 +190,7 @@ def query_boundaries(url, query, proxies={}):
     }
 
 
-def scrape_leaderboard(storage, mode, season=5, proxies={}):
+def scrape_leaderboard(storage, mode, season=6, proxies={}):
     leaderboard_url = "https://robertsspaceindustries.com/api/arena-commander/getLeaderboard"
     query = {
         "map": "MAP-ANY",
@@ -258,6 +265,7 @@ def main():
         "http": "http://web-cache.usyd.edu.au:8080",
         "https": "http://web-cache.usyd.edu.au:8080"
     }
+    #proxies = {}
     
     # Load data and scrape data
     data = {}
