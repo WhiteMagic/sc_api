@@ -125,13 +125,19 @@ class Pilot(object):
 
     @property
     def favorite_ship(self):
-        data = self._data["ship"][0]
-        return (data["name"], float(data["ratio"]))
+        if len(self._data["ship"]) > 0:
+            data = self._data["ship"][0]
+            return (data["name"], float(data["ratio"]))
+        else:
+            return None
 
     @property
     def favorite_input(self):
-        data = self._data["favorite_input"][0]
-        return (data["name"], float(data["ratio"]))
+        if len(self._data["favorite_input"]) > 0:
+            data = self._data["favorite_input"][0]
+            return (data["name"], float(data["ratio"]))
+        else:
+            return None
 
 
 class DeltaEntry(object):
@@ -216,13 +222,13 @@ def scrape_leaderboard(storage, mode, season=6, proxies={}):
         for i, entry in enumerate(req.json()["data"]["resultset"]):
             handle = entry["nickname"]
             if not storage.pilot_exists(handle):
-                #print("New pilot     : {}".format(handle))
+                print("New pilot     : {}".format(handle))
                 storage.update_pilot(handle, entry)
                 tasks.put(Task(handle, mode, proxies))
             else:
                 tmp = Pilot(entry)
                 if tmp.flight_time > storage.get_pilot(tmp.handle).flight_time:
-                    #print("Updating pilot: {}".format(handle))
+                    print("Updating pilot: {}".format(handle))
                     tasks.put(Task(handle, mode, proxies))
                     storage.update_pilot(tmp.handle, entry)
 
