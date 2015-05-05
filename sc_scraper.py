@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
 import argparse
+from collections import deque
 import datetime
-import multiprocessing
+import logging
+import threading
 import os
 import pickle
 import requests
@@ -11,31 +13,45 @@ import time
 
 
 
-class ExtendedDataGrabber(multiprocessing.Process):
+class TaskManager(object):
 
-    def __init__(self, task_queue, result_queue):
-        multiprocessing.Process.__init__(self)
-        self.task_queue = task_queue
-        self.result_queue = result_queue
+    """Ensures that a certain number of task threads are active at any given time."""
 
-    def run(self):
-        proc_name = self.name
-        while True:
-            next_task = self.task_queue.get()
-            if next_task is None:
-                self.task_queue.task_done()
-                break
-            answer = next_task()
-            self.task_queue.task_done()
-            self.result_queue.put(answer)
-        return
+    def __init__(self, thread_count):
+        self.thread_count = thread_count
+        self.queue = deque()
+        self._current_count = 0
+        self._counter_lock = threading.Lock()
+        self._queue_lock = threading.Lock()
+
+    def create(self, storage, handle, mode, proxies):
+        thread = threading.Thread(target=Task(storage, handle, mode, self.done, proxies))
+        with self._queue_lock:
+            self.queue.append(thread)
+
+    def done(self):
+        with self._counter_lock:
+            self._current_count -= 1
+            assert(self._current_count >= 0)
+        self.start_next()
+
+    def start_next(self):
+        with self._queue_lock:
+            with self._counter_lock:
+                while self._current_count < self.thread_count and len(self.queue) > 0:
+                    thread = self.queue.popleft()
+                    thread.start()
+                    self._current_count += 1
+
 
 
 class Task(object):
 
-    def __init__(self, handle, mode, proxies={}):
+    def __init__(self, storage, handle, mode, callback, proxies={}):
+        self.storage = storage
         self.handle = handle
         self.mode = mode
+        self.callback = callback
         self.proxies = proxies
 
     def __call__(self):
@@ -50,8 +66,11 @@ class Task(object):
             params=payload,
             proxies=self.proxies
         )
-        #print("Processing {}".format(self.handle))
-        return (self.handle, r.json()["data"]["resultset"][0])
+        try:
+            self.storage.get_pilot(self.handle).update(r.json()["data"]["resultset"][0])
+        except TypeError:
+            logging.error("ERROR: invalid data for user {}".format(self.handle))
+        self.callback()
 
 
 class Pilot(object):
@@ -183,7 +202,6 @@ class Storage(object):
         if delta.date not in self._storage:
             self._storage[delta.date] = {}
         self._storage[delta.date][handle] = delta
-        print(len(self._storage[delta.date]))
 
 
 def query_boundaries(url, query, proxies={}):
@@ -208,12 +226,7 @@ def scrape_leaderboard(storage, mode, season=6, proxies={}):
     }
 
     bounds = query_boundaries(leaderboard_url, query, proxies)
-
-    tasks = multiprocessing.JoinableQueue()
-    results = multiprocessing.Queue()
-    data_grabbers = [ExtendedDataGrabber(tasks, results) for _ in range(20)]
-    for entry in data_grabbers:
-        entry.start()
+    manager = TaskManager(50)
 
     for i in range(bounds["pages"]):
         query["page"] = i+1
@@ -222,27 +235,22 @@ def scrape_leaderboard(storage, mode, season=6, proxies={}):
         for i, entry in enumerate(req.json()["data"]["resultset"]):
             handle = entry["nickname"]
             if not storage.pilot_exists(handle):
-                print("New pilot     : {}".format(handle))
+                logging.debug("New pilot     : {}".format(handle))
                 storage.update_pilot(handle, entry)
-                tasks.put(Task(handle, mode, proxies))
+                manager.create(storage, handle, mode, proxies)
             else:
                 tmp = Pilot(entry)
                 if tmp.flight_time > storage.get_pilot(tmp.handle).flight_time:
-                    print("Updating pilot: {}".format(handle))
-                    tasks.put(Task(handle, mode, proxies))
+                    logging.debug("Updating pilot: {}".format(handle))
+                    manager.create(storage, handle, mode, proxies)
                     storage.update_pilot(tmp.handle, entry)
+        manager.start_next()
 
-    time.sleep(10)
-    print("Inserting poison pill")
-    for entry in data_grabbers:
-        tasks.put(None)
-
-    print("Waiting for detailed data to be grabbed")
-    tasks.join()
-    print("Inserting data")
-    while not results.empty():
-        entry = results.get()
-        storage.get_pilot(entry[0]).update(entry[1])
+    logging.debug("Waiting for all tasks to finish")
+    manager.start_next()
+    while(len(manager.queue) > 0):
+        logging.debug("Tasks remaining: {:d}".format(len(manager.queue)))
+        time.sleep(1)
 
 
 def scrape_data(data, proxies):
@@ -254,7 +262,7 @@ def scrape_data(data, proxies):
     }
 
     for mode in mode_list.values():
-        print(">>> Processing mode: {}".format(mode))
+        logging.debug(">>> Processing mode: {}".format(mode))
         if mode not in data:
             data[mode] = Storage()
         scrape_leaderboard(data[mode], mode, proxies)
@@ -265,6 +273,16 @@ def main():
     parser = argparse.ArgumentParser(description="Star Citizen Leaderboard Scraper")
     parser.add_argument("data_file", help="Data file which contains the data")
     args = parser.parse_args()
+
+    # Setup logging
+    logging.basicConfig(
+            filename="/home/lott/sc_scraper_debug.log",
+            format="%(asctime)s %(levelname)10s %(message)s",
+            datefmt="%Y-%m-%d %H:%M",
+            level=logging.DEBUG
+    )
+    #logging.getLogger("requests").setLevel(logging.WARNING)
+    #logging.getLogger('urllib3').setLevel(logging.WARNING)
 
     # Proxy server configuration
     proxies = {
