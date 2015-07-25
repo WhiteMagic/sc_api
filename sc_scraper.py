@@ -214,7 +214,7 @@ def query_boundaries(url, query, proxies={}):
     }
 
 
-def scrape_leaderboard(storage, mode, season=6, proxies={}):
+def scrape_leaderboard(storage, mode, season=9, proxies={}):
     leaderboard_url = "https://robertsspaceindustries.com/api/arena-commander/getLeaderboard"
     query = {
         "map": "MAP-ANY",
@@ -265,7 +265,7 @@ def scrape_data(data, proxies):
         logging.debug(">>> Processing mode: {}".format(mode))
         if mode not in data:
             data[mode] = Storage()
-        scrape_leaderboard(data[mode], mode, proxies)
+        scrape_leaderboard(data[mode], mode, 9, proxies)
 
 
 def main():
